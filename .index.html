@@ -210,7 +210,8 @@ function drawChart(canvas, candles, pivots){
   ctx.fillText(maxY.toLocaleString(), 6, yScale(maxY)+4);
   ctx.fillText(minY.toLocaleString(), 6, yScale(minY)+12);
 }
-  async function run(){
+
+async function run(){
   const status=document.getElementById("status");
   try{
     status.textContent="جلب بيانات OHLC اليومية من CoinGecko…";
@@ -254,18 +255,18 @@ function drawChart(canvas, candles, pivots){
     function gapBadge(pick){
       if(!pick) return "";
       const d=pick.seg.days;
-      if(d>=90 && d<=364) return  <span class="badge">Unclassified 90–364d</span>;
+      if(d>=90 && d<=364) return ` <span class="badge">Unclassified 90–364d</span>`;
       return "";
     }
 
     const report=document.getElementById("report");
     function block(label, pick, cancelled){
       if(!pick){
-        return <div><span class="k">${label} trend</span><div>لا يوجد مقطع مطابق للمدّة.</div></div>;
+        return `<div><span class="k">${label} trend</span><div>لا يوجد مقطع مطابق للمدّة.</div></div>`;
       }
       const s=pick.seg, dirCls=s.dir==="up"?"up":"down";
-      const badge = s.dir==="up" ? <span class="badge bd-up">UP</span> : <span class="badge bd-down">DOWN</span>;
-      return 
+      const badge = s.dir==="up" ? `<span class="badge bd-up">UP</span>` : `<span class="badge bd-down">DOWN</span>`;
+      return `
         <div style="margin-bottom:10px">
           <div><span class="k">${label} trend</span>${badge}${gapBadge(pick)}</div>
           <div class="${dirCls} v">${s.dir.toUpperCase()}</div>
@@ -274,7 +275,7 @@ function drawChart(canvas, candles, pivots){
           <div><span class="k">Change:</span> ${pct(s.change)} · <span class="k">Days:</span> ${s.days}</div>
           <div><span class="k">Status:</span> ${cancelled ? "Cancelled by opposite later segment" : "Active"}</div>
         </div>
-      ;
+      `;
     }
     report.innerHTML = block("Primary", pickP, cancelledP)
                      + "<hr style='border-color:#262b36'>"
@@ -283,22 +284,22 @@ function drawChart(canvas, candles, pivots){
                      + block("Minor", pickm, cancelledm);
 
     const hint = tradingHint(pickM, segMinor);
-    document.getElementById("hint").innerHTML = <div class="${hint.ok?'up':'k'} b">${hint.text}</div>;
+    document.getElementById("hint").innerHTML = `<div class="${hint.ok?'up':'k'} b">${hint.text}</div>`;
 
     const cv=document.getElementById("chart");
     drawChart(cv, candles, zzMinor.pivots);
 
     document.getElementById("dyn").innerHTML =
-      ATR-14% (أحدث): <span class="b">${(atrp*100).toFixed(2)}%</span> · 
-    + rev Minor: <span class="b">${(revMinor*100).toFixed(1)}%</span> · 
-    + rev Major: <span class="b">${(revMajor*100).toFixed(1)}%</span> · 
-    + rev Primary: <span class="b">${(revPrimary*100).toFixed(1)}%</span>;
+      `ATR-14% (أحدث): <span class="b">${(atrp*100).toFixed(2)}%</span> · `
+    + `rev Minor: <span class="b">${(revMinor*100).toFixed(1)}%</span> · `
+    + `rev Major: <span class="b">${(revMajor*100).toFixed(1)}%</span> · `
+    + `rev Primary: <span class="b">${(revPrimary*100).toFixed(1)}%</span>`;
 
     document.getElementById("asof").textContent = "آخر شمعة: " + fmtDateMS(last(candles).timeMS);
     status.textContent="تم.";
   }catch(e){
     console.error(e);
-    document.getElementById("status").innerHTML = <span class="err">خطأ: ${e.message || e}</span>;
+    document.getElementById("status").innerHTML = `<span class="err">خطأ: ${e.message || e}</span>`;
   }
 }
 
@@ -306,3 +307,4 @@ run();
 </script>
 </body>
 </html>
+

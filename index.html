@@ -7,78 +7,64 @@
 <style>
   :root { color-scheme: dark; }
   body{margin:0;background:#0f1115;color:#e6e6e6;font-family:Arial,Helvetica,sans-serif}
-  .wrap{max-width:1040px;margin:20px auto;padding:16px}
-  h1{margin:0 0 6px;font-size:22px}
-  .note{color:#9aa0a6;font-size:12px;margin-bottom:10px;line-height:1.6}
-  .made-by{margin-top: 4px;font-size: 14px;color: #ffcc70;font-weight: 500;}
-  .grid{display:grid;grid-template-columns:1fr 340px;gap:14px}
-  .card{background:#171a21;border:1px solid #262b36;border-radius:12px;padding:12px}
+  .wrap{max-width:1080px;margin:18px auto;padding:0 14px}
+  .topline{margin:0 0 8px;font-size:14px;color:#ffcc70;font-weight:600}
+  .grid{display:grid;grid-template-columns:1fr;gap:12px}
+  .card{background:#171a21;border:1px solid #262b36;border-radius:12px;padding:10px}
+  canvas{width:100%;height:460px;background:#0f1115;border-radius:10px}
+  .small{font-size:12px;color:#9aa0a6}
   .k{color:#9aa0a6}
   .v{font-weight:bold}
   .up{color:#7fd18b}
   .down{color:#ff8b8b}
-  canvas{width:100%;height:420px;background:#0f1115;border-radius:10px}
-  .small{font-size:12px;color:#9aa0a6}
   .badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;margin-inline-start:8px;background:#222a}
   .bd-up{color:#7fd18b;border:1px solid #7fd18b55}
   .bd-down{color:#ff8b8b;border:1px solid #ff8b8b55}
   .b{font-weight:700}
-  .err{color:#ff8b8b}
   hr{border:0;border-top:1px solid #262b36;margin:10px 0}
+  .panels{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>BTC/USDT — Dow Theory (Daily, Adaptive)
-    <span id="asof" class="badge">loading…</span>
-  </h1>
-  <div class="made-by">Made by <b>Anas Alwadi</b></div>
-  
-  <div class="note">
-    Source: <b>CryptoCompare histoday</b> (no API key, CORS-friendly).<br>
-    Adaptive thresholds via <b>ATR-14%</b>:
-    Minor ≈ 2.5×ATR% (clamped 6–20%) · Major ≈ 5×ATR% (15–40%) · Primary ≈ 8×ATR% (20–60%).<br>
-    Durations: Primary ≥ 365d · Major 21–90d · Minor ≥ 2d. Any 90–364d segment is shown as <b>Unclassified</b>.<br>
-    Cancellation rule: a trend is cancelled <b>only</b> by an opposite trend of the <b>same class</b>.
-  </div>
+  <!-- Only your name above the chart -->
+  <div class="topline">Made by <b>Anas Alwadi</b></div>
 
   <div class="grid">
     <div class="card">
-      <canvas id="chart" width="900" height="420" aria-label="BTC chart"></canvas>
-      <div class="small">Colored dots = pivots (ZigZag using the adaptive Minor threshold).</div>
+      <canvas id="chart" width="1000" height="460" aria-label="BTC chart"></canvas>
       <div id="dyn" class="small" style="margin-top:6px"></div>
+      <div id="asof" class="small"></div>
     </div>
 
-    <div class="card" id="panels">
+    <div class="card">
       <div id="status" class="small">Loading…</div>
       <hr>
-      <div id="report"></div>
+      <div class="panels" id="report"></div>
       <hr>
-      <div id="hint"></div>
+      <div id="hint" class="small"></div>
     </div>
   </div>
 </div>
 
 <script>
-// ========= Data source =========
-const API = "https://min-api.cryptocompare.com/data/v2/histoday?fsym=BTC&tsym=USDT&limit=2000"; // ~5.5y
+// ===== Data source (CORS friendly, no key) =====
+const API = "https://min-api.cryptocompare.com/data/v2/histoday?fsym=BTC&tsym=USDT&limit=2000";
 
-// ========= Helpers =========
+// ===== Helpers =====
 const fmtDate = ts => new Date(ts*1000).toISOString().slice(0,10);
 const pct = x => (x*100).toFixed(2) + "%";
 const daysBetween = (aTS,bTS) => Math.max(0, Math.round((bTS-aTS)/86400));
 const last = arr => arr[arr.length-1];
 const clamp = (x,min,max)=>Math.max(min,Math.min(max,x));
 
-// True Range & ATR-14 as a % of price
+// True Range & ATR-14 as % of price
 function trueRange(prevClose, high, low){
-  const a = high - low;
-  const b = Math.abs(high - prevClose);
-  const c = Math.abs(low - prevClose);
+  const a = high - low, b = Math.abs(high - prevClose), c = Math.abs(low - prevClose);
   return Math.max(a,b,c);
 }
 function atr14Percent(candles){
-  if(candles.length < 15) return 0.10; // fallback 10%
+  if(candles.length < 15) return 0.10;
   const trs = [];
   for(let i=1;i<candles.length;i++){
     trs.push(trueRange(candles[i-1].close, candles[i].high, candles[i].low));
@@ -93,53 +79,39 @@ function atr14Percent(candles){
   return atr / ref; // 0.05 = 5%
 }
 
-// ZigZag on close with reversal percentage
+// ZigZag on close
 function zigzag(candles, revPct){
   const series = candles.map(c=>({t:c.time, p:c.close}));
   if(series.length<2) return {pivots:[], segments:[]};
-  let pivots=[], trend=null;
-  let extreme = {...series[0]};
-
+  let pivots=[], trend=null, extreme = {...series[0]};
   for(let i=1;i<series.length;i++){
     const {t,p}=series[i];
     if(trend===null){
-      const upMove=(p-extreme.p)/extreme.p;
-      const dnMove=(extreme.p-p)/extreme.p;
-      if(upMove>=revPct){ trend="up"; pivots.push({t:extreme.t,p:extreme.p,type:"low"}); extreme={t,p}; }
-      else if(dnMove>=revPct){ trend="down"; pivots.push({t:extreme.t,p:extreme.p,type:"high"}); extreme={t,p}; }
-      else{
-        if(p>extreme.p) extreme={t,p};
-        if(p<extreme.p) extreme={t,p};
-      }
+      const up=(p-extreme.p)/extreme.p, dn=(extreme.p-p)/extreme.p;
+      if(up>=revPct){ trend="up"; pivots.push({t:extreme.t,p:extreme.p,type:"low"}); extreme={t,p}; }
+      else if(dn>=revPct){ trend="down"; pivots.push({t:extreme.t,p:extreme.p,type:"high"}); extreme={t,p}; }
+      else{ if(p>extreme.p) extreme={t,p}; if(p<extreme.p) extreme={t,p}; }
       continue;
     }
     if(trend==="up"){
-      if(p>extreme.p){ extreme={t,p}; }
-      else{
-        const corr=(extreme.p-p)/extreme.p;
-        if(corr>=revPct){ pivots.push({t:extreme.t,p:extreme.p,type:"high"}); trend="down"; extreme={t,p}; }
-      }
+      if(p>extreme.p) extreme={t,p};
+      else if((extreme.p-p)/extreme.p >= revPct){ pivots.push({t:extreme.t,p:extreme.p,type:"high"}); trend="down"; extreme={t,p}; }
     }else{
-      if(p<extreme.p){ extreme={t,p}; }
-      else{
-        const corr=(p-extreme.p)/extreme.p;
-        if(corr>=revPct){ pivots.push({t:extreme.t,p:extreme.p,type:"low"}); trend="up"; extreme={t,p}; }
-      }
+      if(p<extreme.p) extreme={t,p};
+      else if((p-extreme.p)/extreme.p >= revPct){ pivots.push({t:extreme.t,p:extreme.p,type:"low"}); trend="up"; extreme={t,p}; }
     }
   }
   pivots.push({t:extreme.t,p:extreme.p,type:trend==="up"?"high":"low"});
-
   const segments=[];
   for(let i=0;i<pivots.length-1;i++){
     const A=pivots[i], B=pivots[i+1];
     const dir = (A.type==="low"&&B.type==="high")?"up":(A.type==="high"&&B.type==="low")?"down":(B.p>A.p?"up":"down");
-    const change=(B.p-A.p)/A.p;
-    segments.push({dir,startTS:A.t,endTS:B.t,start:A.p,end:B.p,change,days:daysBetween(A.t,B.t)});
+    segments.push({dir,startTS:A.t,endTS:B.t,start:A.p,end:B.p,change:(B.p-A.p)/A.p,days:daysBetween(A.t,B.t)});
   }
   return {pivots,segments};
 }
 
-// Pick latest segment matching class duration window
+// Latest segment matching a class window
 function pickLatestForClass(segments, cls){
   for(let i=segments.length-1;i>=0;i--){
     const s=segments[i];
@@ -148,7 +120,7 @@ function pickLatestForClass(segments, cls){
   return null;
 }
 
-// ✅ Cancel ONLY if a later opposite segment of the SAME CLASS appears
+// Cancel ONLY by later opposite segment of SAME class
 function cancelledBySameClass(segments, pickIdx, cls){
   if (pickIdx == null || pickIdx < 0) return false;
   const picked = segments[pickIdx];
@@ -161,7 +133,7 @@ function cancelledBySameClass(segments, pickIdx, cls){
   return false;
 }
 
-// Trading hint: go with Major up when a down Minor is broken (i.e., last Minor turns up after down)
+// Trading hint: follow Major up when a down-Minor breaks
 function tradingHint(majorPick, majorCancelled, minorSegments){
   if(!majorPick || majorCancelled || majorPick.seg.dir!=="up") return {text:"Wait for an up Major trend to follow the rule.", ok:false};
   const mLast = last(minorSegments);
@@ -216,63 +188,58 @@ function drawChart(canvas, candles, pivots){
 async function run(){
   const status=document.getElementById("status");
   try{
-    status.textContent="Fetching daily candles from CryptoCompare…";
+    status.textContent="Fetching daily candles…";
     const res=await fetch(API,{cache:"no-store"});
     if(!res.ok) throw new Error("HTTP "+res.status);
     const js=await res.json();
     if(js.Response!=="Success") throw new Error("API error");
-    const candles = js.Data.Data; // [{time, open, high, low, close, ...}]
+    const candles = js.Data.Data;
 
-    // 1) Adaptive thresholds from ATR-14%
+    // Adaptive thresholds from ATR-14%
     const atrp = atr14Percent(candles);
     const revMinor   = clamp(2.5*atrp, 0.06, 0.20);
     const revMajor   = clamp(5.0*atrp, 0.15, 0.40);
     const revPrimary = clamp(8.0*atrp, 0.20, 0.60);
 
-    // 2) ZigZag per class
-    const zzMinor   = zigzag(candles, revMinor);
-    const zzMajor   = zigzag(candles, revMajor);
-    const zzPrimary = zigzag(candles, revPrimary);
+    // ZigZag per class (use major threshold for both Major & Strong Major)
+    const zzMinor    = zigzag(candles, revMinor);
+    const zzMajor    = zigzag(candles, revMajor);
+    const zzPrimary  = zigzag(candles, revPrimary);
 
-    // 3) Duration windows
+    // Class windows (added Strong Major = 91–360d)
     const CFG = {
-      primary:{ name:"Primary", minDays:365, maxDays:Infinity },
-      major:  { name:"Major",   minDays:21,  maxDays:90 },
-      minor:  { name:"Minor",   minDays:2,   maxDays:Infinity }
+      primary:      { name:"Primary",       minDays:365, maxDays:Infinity },
+      strongMajor:  { name:"Strong Major",  minDays:91,  maxDays:360     },
+      major:        { name:"Major",         minDays:21,  maxDays:90      },
+      minor:        { name:"Minor",         minDays:2,   maxDays:Infinity }
     };
 
-    const segPrim  = zzPrimary.segments;
-    const segMajor = zzMajor.segments;
-    const segMinor = zzMinor.segments;
+    const segPrim   = zzPrimary.segments;
+    const segMajors = zzMajor.segments; // used for Major & Strong Major classification
+    const segMinor  = zzMinor.segments;
 
-    const pickP = pickLatestForClass(segPrim,  CFG.primary);
-    const pickM = pickLatestForClass(segMajor, CFG.major);
-    const pickm = pickLatestForClass(segMinor, CFG.minor);
+    const pickP  = pickLatestForClass(segPrim,   CFG.primary);
+    const pickSM = pickLatestForClass(segMajors, CFG.strongMajor);
+    const pickM  = pickLatestForClass(segMajors, CFG.major);
+    const pickm  = pickLatestForClass(segMinor,  CFG.minor);
 
-    const cancelledP = pickP ? cancelledBySameClass(segPrim,  pickP.idx, CFG.primary) : false;
-    const cancelledM = pickM ? cancelledBySameClass(segMajor, pickM.idx, CFG.major)   : false;
-    const cancelledm = pickm ? cancelledBySameClass(segMinor, pickm.idx, CFG.minor)   : false;
+    const cancelledP  = pickP  ? cancelledBySameClass(segPrim,   pickP.idx,  CFG.primary)      : false;
+    const cancelledSM = pickSM ? cancelledBySameClass(segMajors, pickSM.idx, CFG.strongMajor)  : false;
+    const cancelledM  = pickM  ? cancelledBySameClass(segMajors, pickM.idx,  CFG.major)        : false;
+    const cancelledm  = pickm  ? cancelledBySameClass(segMinor,  pickm.idx,  CFG.minor)        : false;
 
-    // Unclassified badge (90–364 days)
-    function gapBadge(pick){
-      if(!pick) return "";
-      const d=pick.seg.days;
-      if(d>=90 && d<=364) return `<span class="badge">Unclassified 90–364d</span>`;
-      return "";
-    }
-
-    // 4) Report blocks
+    // Build report blocks
     const report=document.getElementById("report");
     function block(label, pick, cancelled){
       if(!pick){
-        return `<div><span class="k">${label} trend</span><div>No segment matches the duration window.</div></div>`;
+        return `<div class="small"><span class="k">${label} trend</span><div>No segment matches the duration window.</div></div>`;
       }
       const s=pick.seg, dirCls=s.dir==="up"?"up":"down";
       const badge = s.dir==="up" ? `<span class="badge bd-up">UP</span>` : `<span class="badge bd-down">DOWN</span>`;
       return `
-        <div style="margin-bottom:10px">
-          <div><span class="k">${label} trend</span>${badge} ${gapBadge(pick)}</div>
-          <div class="${dirCls} v">${s.dir.toUpperCase()}</div>
+        <div>
+          <div class="${dirCls} v" style="font-size:16px;margin-bottom:4px">${label} trend ${badge}</div>
+          <div class="${dirCls} v" style="font-size:18px">${s.dir.toUpperCase()}</div>
           <div><span class="k">From:</span> ${fmtDate(s.startTS)} @ ${s.start.toLocaleString()}</div>
           <div><span class="k">To:</span> ${fmtDate(s.endTS)} @ ${s.end.toLocaleString()}</div>
           <div><span class="k">Change:</span> ${pct(s.change)} · <span class="k">Days:</span> ${s.days}</div>
@@ -280,32 +247,33 @@ async function run(){
         </div>
       `;
     }
-    report.innerHTML = block("Primary", pickP, cancelledP)
-                     + "<hr>"
-                     + block("Major",   pickM, cancelledM)
-                     + "<hr>"
-                     + block("Minor",   pickm, cancelledm);
+    report.innerHTML =
+        block("Primary",      pickP,  cancelledP)
+      + block("Strong Major", pickSM, cancelledSM)
+      + block("Major",        pickM,  cancelledM)
+      + block("Minor",        pickm,  cancelledm);
 
-    // 5) Trading hint (requires Major up & not cancelled)
+    // Trading hint (requires Major UP & not cancelled)
     const hint = tradingHint(pickM, cancelledM, segMinor);
-    document.getElementById("hint").innerHTML = `<div class="${hint.ok?'up':'k'} b">${hint.text}</div>`;
+    document.getElementById("hint").innerHTML =
+      `<div class="${hint.ok?'up':'k'}">${hint.text}</div>`;
 
-    // 6) Chart using Minor pivots
+    // Chart with Minor pivots
     const cv=document.getElementById("chart");
     drawChart(cv, candles, zzMinor.pivots);
 
-    // Info line
+    // Info
     document.getElementById("dyn").innerHTML =
       `ATR-14%: <span class="b">${(atrp*100).toFixed(2)}%</span> · `
     + `rev Minor: <span class="b">${(revMinor*100).toFixed(1)}%</span> · `
     + `rev Major: <span class="b">${(revMajor*100).toFixed(1)}%</span> · `
     + `rev Primary: <span class="b">${(revPrimary*100).toFixed(1)}%</span>`;
-
     document.getElementById("asof").textContent = "Last candle: " + fmtDate(last(candles).time);
-    status.textContent="Done.";
+
+    document.getElementById("status").textContent = "Done.";
   }catch(e){
     console.error(e);
-    document.getElementById("status").innerHTML = `<span class="err">Error: ${e.message || e}</span>`;
+    document.getElementById("status").textContent = "Error: " + (e.message || e);
   }
 }
 
@@ -313,5 +281,3 @@ run();
 </script>
 </body>
 </html>
-
-

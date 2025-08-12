@@ -44,7 +44,7 @@
 </div>
 
 <script>
-// ===== Data source (CORS friendly) =====
+// ===== Data source (CORS-friendly, no key) =====
 const API = "https://min-api.cryptocompare.com/data/v2/histoday?fsym=BTC&tsym=USDT&limit=2000";
 
 // ===== Helpers =====
@@ -53,6 +53,7 @@ const pct = x => (x*100).toFixed(2) + "%";
 const daysBetween = (aTS,bTS) => Math.max(0, Math.round((bTS-aTS)/86400));
 const last = arr => arr[arr.length-1];
 const clamp = (x,min,max)=>Math.max(min,Math.min(max,x));
+function findLastIdx(arr, pred){ for(let i=arr.length-1;i>=0;i--) if(pred(arr[i],i)) return i; return -1; }
 
 // ATR-14% of price
 function trueRange(prevClose, high, low){
@@ -118,8 +119,7 @@ function pickLatestForClass(segments, cls){
   return null;
 }
 
-// --- Cancellation rules + details (show the reversing segment) ---
-// Primary: cancelled only by later opposite Primary
+// Cancellation with details (for showing "Reversed by …")
 function cancelledPrimaryDetail(segPrim, pickIdx){
   if(pickIdx==null || pickIdx<0) return null;
   const picked=segPrim[pickIdx];
@@ -131,7 +131,6 @@ function cancelledPrimaryDetail(segPrim, pickIdx){
   }
   return null;
 }
-// Minor: cancelled only by later opposite Minor
 function cancelledMinorDetail(segMinor, pickIdx){
   if(pickIdx==null || pickIdx<0) return null;
   const picked=segMinor[pickIdx];
@@ -143,28 +142,8 @@ function cancelledMinorDetail(segMinor, pickIdx){
   }
   return null;
 }
-// Major: cancelled by later opposite Major OR later opposite Strong Major
-function cancelledMajorDetail(segMajors, pickMIdx){
-  if(pickMIdx==null || pickMIdx<0) return null;
-  const picked = segMajors[pickMIdx];
-  for(let j=pickMIdx+1;j<segMajors.length;j++){
-    const s = segMajors[j];
-    const isMajor      = (s.days>=CFG.major.minDays && s.days<=CFG.major.maxDays);
-    const isStrongMaj  = (s.days>=CFG.strongMajor.minDays && s.days<=CFG.strongMajor.maxDays);
-    if(!(isMajor || isStrongMaj)) continue;
-    if(s.dir!==picked.dir) return {byClass: isStrongMaj?CFG.strongMajor:CFG.major, seg:s};
-  }
-  return null;
-}
 
-// If there is a later Major (any direction) after a Strong Major → hide Strong Major panel
-function shouldHideStrongMajor(pickSMIdx, pickMIdx){
-  if(pickSMIdx==null || pickSMIdx<0) return false;
-  if(pickMIdx==null || pickMIdx<0) return false;
-  return pickMIdx > pickSMIdx;
-}
-
-// Canvas chart
+// Chart
 function drawChart(canvas, candles, pivots){
   const ctx=canvas.getContext("2d");
   const W=canvas.width, H=canvas.height;
@@ -226,17 +205,46 @@ async function run(){
   const segMajors  = zzMajors.segments;
   const segPrimary = zzPrimary.segments;
 
-  const pickm  = pickLatestForClass(segMinor,   CFG.minor);
-  const pickM  = pickLatestForClass(segMajors,  CFG.major);
-  const pickSM = pickLatestForClass(segMajors,  CFG.strongMajor);
+  // ---- Anas's rule for Major & Strong Major ----
+  const isMajorSeg  = s => (s.days>=CFG.major.minDays   && s.days<=CFG.major.maxDays);
+  const isStrongSeg = s => (s.days>=CFG.strongMajor.minDays && s.days<=CFG.strongMajor.maxDays);
+
+  const idxStrongUp = findLastIdx(segMajors, s => isStrongSeg(s) && s.dir==="up");
+  const idxMajorUp  = findLastIdx(segMajors, s => isMajorSeg(s)  && s.dir==="up");
+
+  const strongUp = (idxStrongUp>=0) ? {idx:idxStrongUp, seg:segMajors[idxStrongUp]} : null;
+  const majorUp  = (idxMajorUp>=0)  ? {idx:idxMajorUp,  seg:segMajors[idxMajorUp]}  : null;
+
+  // Effective Major UP: if Strong UP is the same leg continuing, treat it as promoted Major (not cancelled)
+  let effectiveMajorUp = null;
+  if (strongUp && (!majorUp || strongUp.seg.endTS >= majorUp.seg.endTS)) {
+    effectiveMajorUp = {idx: strongUp.idx, seg: strongUp.seg};
+  } else if (majorUp) {
+    effectiveMajorUp = majorUp;
+  }
+
+  // Major is cancelled ONLY if a later Major DOWN appears
+  function findLaterMajorDown(afterIdx){
+    for(let j=afterIdx+1;j<segMajors.length;j++){
+      const s=segMajors[j];
+      if(isMajorSeg(s) && s.dir==="down") return {idx:j, seg:s};
+    }
+    return null;
+  }
+  let majorCancelled=false, majorCancelledBy=null;
+  if(effectiveMajorUp){
+    const laterDown = findLaterMajorDown(effectiveMajorUp.idx);
+    if(laterDown){ majorCancelled=true; majorCancelledBy=laterDown; }
+  }
+
+  // Hide Strong Major panel if a later Major (down) cancelled the leg
+  const showStrongPanel = !(majorCancelled && strongUp && (effectiveMajorUp.idx === strongUp.idx));
+
+  // Primary & Minor picks + cancellation details (same-class)
   const pickP  = pickLatestForClass(segPrimary, CFG.primary);
-
-  const cancMinor = pickm ? cancelledMinorDetail(segMinor, pickm.idx) : null;
+  const pickm  = pickLatestForClass(segMinor,   CFG.minor);
   const cancPrim  = pickP ? cancelledPrimaryDetail(segPrimary, pickP.idx) : null;
-  const cancMajor = pickM ? cancelledMajorDetail(segMajors, pickM.idx) : null;
-
-  // Hide Strong Major if there is a later Major
-  const hideStrong = (pickSM && pickM && shouldHideStrongMajor(pickSM.idx, pickM.idx));
+  const cancMinor = pickm ? cancelledMinorDetail(segMinor,     pickm.idx) : null;
 
   // Build report
   const report=document.getElementById("report");
@@ -252,7 +260,7 @@ async function run(){
     `;
   }
 
-  function block(label, pick, canc){
+  function block(label, pick, cancelInfo){
     if(!pick){
       return `<div class="small"><span class="k">${label} trend</span><div>No segment matches the duration.</div></div>`;
     }
@@ -264,15 +272,19 @@ async function run(){
         <div><span class="k">From:</span> ${fmtDate(s.startTS)} @ ${s.start.toLocaleString()}</div>
         <div><span class="k">To:</span> ${fmtDate(s.endTS)} @ ${s.end.toLocaleString()}</div>
         <div><span class="k">Change:</span> ${pct(s.change)} · <span class="k">Days:</span> ${s.days}</div>
-        ${reversedLines(canc)}
+        ${reversedLines(cancelInfo)}
       </div>
     `;
   }
 
+  const pickSM = strongUp;               // may be null
+  const pickM  = effectiveMajorUp;       // may be null
+  const cancelInfoM = majorCancelledBy ? { byClass:{name:"Major"}, seg: majorCancelledBy.seg } : null;
+
   report.innerHTML =
       block(CFG.primary.name,     pickP,  cancPrim)
-    + (hideStrong ? "" : block(CFG.strongMajor.name, pickSM, null))
-    + block(CFG.major.name,       pickM,  cancMajor)
+    + (showStrongPanel && pickSM ? block(CFG.strongMajor.name, pickSM, null) : "")
+    + block(CFG.major.name,       pickM,  cancelInfoM)
     + block(CFG.minor.name,       pickm,  cancMinor);
 
   // Chart + info

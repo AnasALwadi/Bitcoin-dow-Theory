@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>BTC Dow Theory – Adaptive (ATR-based)</title>
+<style>
+  body{margin:0;background:#0f1115;color:#e6e6e6;font-family:Arial,Helvetica,sans-serif}
+  .wrap{max-width:1040px;margin:20px auto;padding:16px}
+  h1{margin:0 0 6px;font-size:22px}
+  .note{color:#9aa0a6;font-size:12px;margin-bottom:10px}
+  .grid{display:grid;grid-template-columns:1fr 340px;gap:14px}
+  .card{background:#171a21;border:1px solid #262b36;border-radius:12px;padding:12px}
+  .k{color:#9aa0a6}
+  .v{font-weight:bold}
+  .up{color:#7fd18b}
+  .down{color:#ff8b8b}
+  canvas{width:100%;height:420px;background:#0f1115;border-radius:10px}
+  .small{font-size:12px;color:#9aa0a6}
+  .badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;margin-inline-start:8px;background:#222a}
+  .bd-up{color:#7fd18b;border:1px solid #7fd18b55}
+  .bd-down{color:#ff8b8b;border:1px solid #ff8b8b55}
+  .b{font-weight:700}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>BTC/USDT – Dow Theory (Daily, Adaptive)
+    <span id="asof" class="badge">loading…</span>
+  </h1>
+  <div class="note">
+    العتبات تتكيّف تلقائيًا باستخدام <b>ATR-14%</b>:
+    Minor≈2.5×ATR% (6–20%) · Major≈5×ATR% (15–40%) · Primary≈8×ATR% (20–60%).<br>
+    المدد: Primary ≥365d · Major 21–90d · Minor ≥2d · الفترة 90–364d = Unclassified.
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <canvas id="chart" width="900" height="420"></canvas>
+      <div class="small">المصدر: CryptoCompare (histoday). النقاط الملوّنة = pivots (ZigZag باستخدام عتبة Minor المتكيّفة).</div>
+      <div id="dyn" class="small" style="margin-top:6px"></div>
+    </div>
+
+    <div class="card" id="panels">
+      <div id="status" class="small">Loading…</div>
+      <hr style="border-color:#262b36">
+      <div id="report"></div>
+      <hr style="border-color:#262b36">
+      <div id="hint"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ===== API =====
+const API = "https://min-api.cryptocompare.com/data/v2/histoday?fsym=BTC&tsym=USDT&limit=2000"; // ~5.5y
+
+// ===== Helpers =====
+const fmtDate = ts => new Date(ts*1000).toISOString().slice(0,10);
+const pct = x => (x*100).toFixed(2) + "%";
+const daysBetween = (aTS,bTS) => Math.max(0, Math.round((bTS-aTS)/86400));
+const last = arr => arr[arr.length-1];
+const clamp = (x,min,max)=>Math.max(min,Math.min(max,x));
+
+// True Range و ATR-14
+function trueRange(prevClose, high, low){
+  const a = high - low;
+  const b = Math.abs(high - prevClose);
+  const c = Math.abs(low - prevClose);
+  return Math.max(a, b, c);
+}
+function atr14Percent(candles){
+  if(candles.length < 15) return 0.1; // fallback 10%
+  let trs = [];
+  for(let i=1;i<candles.length;i++){
+    trs.push(trueRange(candles[i-1].close, candles[i].high, candles[i].low));
+  }
+  // SMA على 14
+  let atrs=[];
+  for(let i=13;i<trs.length;i++){
+    let sum=0; for(let k=i-13;k<=i;k++) sum+=trs[k];
+    atrs.push(sum/14);
+  }
+  const atr = last(atrs);
+  const ref = last(candles).close || 1;
+  return atr / ref; // نسبة مئوية (0.05 = 5%)
+}
+
+// ZigZag بسيط على الإغلاق بعتبة revPct (نسبة)
+function zigzag(candles, revPct){
+  const series = candles.map(c=>({t:c.time, p:c.close}));
+  if(series.length<2) return {pivots:[], segments:[]};
+  let pivots=[], trend=null;
+  let extreme = {...series[0]};
+  for(let i=1;i<series.length;i++){
+    const {t,p}=series[i];
+    if(trend===null){
+      const upMove=(p-extreme.p)/extreme.p;
+      const dnMove=(extreme.p-p)/extreme.p;
+      if(upMove>=revPct){ trend="up"; pivots.push({t:extreme.t,p:extreme.p,type:"low"}); extreme={t,p}; }
+      else if(dnMove>=revPct){ trend="down"; pivots.push({t:extreme.t,p:extreme.p,type:"high"}); extreme={t,p}; }
+      else{
+        if(p>extreme.p) extreme={t,p};
+if(p<extreme.p) extreme={t,p};
+      }
+      continue;
+    }
+    if(trend==="up"){
+      if(p>extreme.p){ extreme={t,p}; }
+      else{
+        const corr=(extreme.p-p)/extreme.p;
+        if(corr>=revPct){ pivots.push({t:extreme.t,p:extreme.p,type:"high"}); trend="down"; extreme={t,p}; }
+      }
+    }else{
+      if(p<extreme.p){ extreme={t,p}; }
+      else{
+        const corr=(p-extreme.p)/extreme.p;
+        if(corr>=revPct){ pivots.push({t:extreme.t,p:extreme.p,type:"low"}); trend="up"; extreme={t,p}; }
+      }
+    }
+  }
+  pivots.push({t:extreme.t,p:extreme.p,type:trend==="up"?"high":"low"});
+  const segments=[];
+  for(let i=0;i<pivots.length-1;i++){
+    const A=pivots[i], B=pivots[i+1];
+    const dir = (A.type==="low"&&B.type==="high")?"up":(A.type==="high"&&B.type==="low")?"down":(B.p>A.p?"up":"down");
+    const change=(B.p-A.p)/A.p;
+    segments.push({dir,startTS:A.t,endTS:B.t,start:A.p,end:B.p,change,days:daysBetween(A.t,B.t)});
+  }
+  return {pivots,segments};
+}
+
+// اختيار آخر مقطع يطابق قيود الفئة
+function pickLatestForClass(segments, cls){
+  for(let i=segments.length-1;i>=0;i--){
+    const s=segments[i];
+    if(s.days>=cls.minDays && s.days<=cls.maxDays) return {idx:i, seg:s};
+  }
+  return null;
+}
+// هل أُلغي الترند بظهور عكسه لاحقًا؟
+function isCancelled(segments, pickIdx){
+  if(pickIdx==null) return false;
+  const picked = segments[pickIdx];
+  for(let j=pickIdx+1;j<segments.length;j++){
+    if(segments[j].dir!==picked.dir) return true;
+  }
+  return false;
+}
+
+// إشارة التداول (حسب نصّك)
+function tradingHint(majorPick, minorSegments){
+  if(!majorPick || majorPick.seg.dir!=="up") return {text:"انتظر Major صاعد لاتباع القاعدة.", ok:false};
+  const mLast = last(minorSegments);
+  const mPrev = minorSegments.length>1 ? minorSegments[minorSegments.length-2] : null;
+  if(!mLast || !mPrev) return {text:"نحتاج مزيدًا من بيانات Minor.", ok:false};
+  if(mPrev.dir==="down" && mLast.dir==="up") return {text:"Major صاعد + كُسر Minor الهابط → إشارة LONG.", ok:true};
+  if(mLast.dir==="down") return {text:"Major صاعد لكن Minor هابط الآن → انتظر كسره لأعلى.", ok:false};
+  return {text:"Major صاعد وMinor أيضًا صاعد (لا يوجد كسر حديث).", ok:false};
+}
+
+// رسم بسيط
+function drawChart(canvas, candles, pivots){
+  const ctx=canvas.getContext("2d");
+  const W=canvas.width, H=canvas.height;
+  ctx.clearRect(0,0,W,H);
+  const padL=40, padR=10, padT=10, padB=24;
+
+  const xs=candles.map(c=>c.time), ys=candles.map(c=>c.close);
+  const minY=Math.min(...ys), maxY=Math.max(...ys);
+  const x0=xs[0], x1=xs[xs.length-1];
+  const xScale = t => padL + ( (t-x0)/(x1-x0) )*(W-padL-padR);
+  const yScale = p => H-padB - ((p-minY)/(maxY-minY))*(H-padT-padB);
+
+  // grid
+  ctx.strokeStyle="#1f2430"; ctx.lineWidth=1;
+  for(let i=0;i<=5;i++){
+    const y=padT+i*(H-padT-padB)/5;
+    ctx.beginPath(); ctx.moveTo(padL,y); ctx.lineTo(W-padR,y); ctx.stroke();
+  }
+
+  // price line
+  ctx.strokeStyle="#8ab4f8"; ctx.lineWidth=1.5; ctx.beginPath();
+  candles.forEach((c,i)=>{
+    const x=xScale(c.time), y=yScale(c.close);
+    if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+  });
+  ctx.stroke();
+
+  // pivots
+  pivots.forEach(p=>{
+    const x=xScale(p.t), y=yScale(p.p);
+    ctx.fillStyle = p.type==="high" ? "#ff8b8b" : "#7fd18b";
+    ctx.beginPath(); ctx.arc(x,y,3,0,Math.PI*2); ctx.fill();
+  });
+
+  // y labels
+  ctx.fillStyle="#9aa0a6"; ctx.font="11px Arial";
+  ctx.fillText(maxY.toLocaleString(), 6, yScale(maxY)+4);
+  ctx.fillText(minY.toLocaleString(), 6, yScale(minY)+12);
+}
+
+async function run(){
+  const status=document.getElementById("status");
+  status.textContent="Fetching daily candles…";
+  const res=await fetch(API,{cache:"no-store"}); const js=await res.json();
+  if(js.Response!=="Success"){ status.textContent="API error"; return; }
+  const candles=js.Data.Data; // {time, open, high, low, close}
+// 1) احسب ATR-14 كنسبة
+  const atrp = atr14Percent(candles); // مثال: 0.07 = 7%
+  // 2) ولّد العتبات المتكيّفة (مع حدود منطقية)
+  const revMinor   = clamp(2.5*atrp, 0.06, 0.20);
+  const revMajor   = clamp(5.0*atrp, 0.15, 0.40);
+  const revPrimary = clamp(8.0*atrp, 0.20, 0.60);
+
+  // 3) ZigZag حسب كل عتبة
+  const zzMinor   = zigzag(candles, revMinor);
+  const zzMajor   = zigzag(candles, revMajor);
+  const zzPrimary = zigzag(candles, revPrimary);
+
+  // 4) المدد الزمنية كما هي
+  const CFG = {
+    primary:{ name:"Primary", minDays:365, maxDays:Infinity },
+    major:  { name:"Major",   minDays:21,  maxDays:90 },
+    minor:  { name:"Minor",   minDays:2,   maxDays:Infinity }
+  };
+
+  const segPrim  = zzPrimary.segments;
+  const segMajor = zzMajor.segments;
+  const segMinor = zzMinor.segments;
+
+  const pickP = pickLatestForClass(segPrim,  CFG.primary);
+  const pickM = pickLatestForClass(segMajor, CFG.major);
+  const pickm = pickLatestForClass(segMinor, CFG.minor);
+
+  const cancelledP = pickP ? isCancelled(segPrim,  pickP.idx) : false;
+  const cancelledM = pickM ? isCancelled(segMajor, pickM.idx) : false;
+  const cancelledm = pickm ? isCancelled(segMinor, pickm.idx) : false;
+
+  // تقرير الفجوة 90–364 يوم (غير مصنفة)
+  function gapBadge(pick){
+    if(!pick) return "";
+    const d=pick.seg.days;
+    if(d>=90 && d<=364) return  <span class="badge">Unclassified 90–364d</span>;
+    return "";
+  }
+
+  const report=document.getElementById("report");
+  function block(label, pick, cancelled){
+    if(!pick){
+      return <div><span class="k">${label} trend</span><div>لا يوجد مقطع مطابق للمدّة.</div></div>;
+    }
+    const s=pick.seg, dirCls=s.dir==="up"?"up":"down";
+    const badge = s.dir==="up" ? <span class="badge bd-up">UP</span> : <span class="badge bd-down">DOWN</span>;
+    return 
+      <div style="margin-bottom:10px">
+        <div><span class="k">${label} trend</span>${badge}${gapBadge(pick)}</div>
+        <div class="${dirCls} v">${s.dir.toUpperCase()}</div>
+        <div><span class="k">From:</span> ${fmtDate(s.startTS)} @ ${s.start.toLocaleString()}</div>
+        <div><span class="k">To:</span> ${fmtDate(s.endTS)} @ ${s.end.toLocaleString()}</div>
+        <div><span class="k">Change:</span> ${pct(s.change)} · <span class="k">Days:</span> ${s.days}</div>
+        <div><span class="k">Status:</span> ${cancelled ? "Cancelled by opposite later segment" : "Active"}</div>
+      </div>
+    ;
+  }
+  report.innerHTML = block("Primary", pickP, cancelledP)
+                   + "<hr style='border-color:#262b36'>"
+                   + block("Major", pickM, cancelledM)
+                   + "<hr style='border-color:#262b36'>"
+                   + block("Minor", pickm, cancelledm);
+
+  // إشارة التداول
+  const hint = tradingHint(pickM, segMinor);
+  document.getElementById("hint").innerHTML = <div class="${hint.ok?'up':'k'} b">${hint.text}</div>;
+
+  // الرسم باستخدام عتبة الـ Minor المتكيّفة
+  const cv=document.getElementById("chart");
+  drawChart(cv, candles, zzMinor.pivots);
+
+  // عرض العتبات المتكيّفة
+  document.getElementById("dyn").innerHTML =
+    ATR-14% (آخر): <span class="b">${(atrp*100).toFixed(2)}%</span> · 
+  + rev Minor: <span class="b">${(revMinor*100).toFixed(1)}%</span> · 
+  + rev Major: <span class="b">${(revMajor*100).toFixed(1)}%</span> · 
+  + rev Primary: <span class="b">${(revPrimary*100).toFixed(1)}%</span>;
+
+  // as-of
+  document.getElementById("asof").textContent = "Last: " + fmtDate(last(candles).time);
+  status.textContent="Done.";
+}
+
+run().catch(e=>{console.error(e); document.getElementById("status").textContent="Error: "+e;});
+</script>
+</body>
+</html>

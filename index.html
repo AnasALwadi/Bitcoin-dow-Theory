@@ -34,9 +34,7 @@
 
   <div class="grid">
     <div class="card">
-      <canvas id="chart" width="1000" height="460" aria-label="BTC chart"></canvas>
-      <div id="dyn" class="small" style="margin-top:6px"></div>
-      <div id="asof" class="small"></div>
+     
     </div>
 
     <div class="card">
@@ -293,12 +291,12 @@ async function run(){
   const cv=document.getElementById("chart");
   drawChart(cv, candles, zzMinor.pivots);
 
-  document.getElementById("dyn").innerHTML =
+ // document.getElementById("dyn").innerHTML =
     `ATR-14%: <span class="b">${(atrp*100).toFixed(2)}%</span> · `
   + `rev Minor: <span class="b">${(revMinor*100).toFixed(1)}%</span> · `
   + `rev Major: <span class="b">${(revMajor*100).toFixed(1)}%</span> · `
   + `rev Primary: <span class="b">${(revPrimary*100).toFixed(1)}%</span>`;
-  document.getElementById("asof").textContent = "Last candle: " + fmtDate(last(candles).time);
+//  document.getElementById("asof").textContent = "Last candle: " + fmtDate(last(candles).time);
 }
 
 run().catch(e=>{ console.error(e); });

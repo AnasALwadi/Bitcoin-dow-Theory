@@ -255,7 +255,7 @@ async function run(){
     function gapBadge(pick){
       if(!pick) return "";
       const d=pick.seg.days;
-      if(d>=90 && d<=364) return ` <span class="badge">Unclassified 90–364d</span>`;
+      if(d>=90 && d<=364) return '<span class="badge">Unclassified</span>';
       return "";
     }
 

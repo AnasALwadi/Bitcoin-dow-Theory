@@ -291,12 +291,12 @@ async function run(){
   const cv=document.getElementById("chart");
   drawChart(cv, candles, zzMinor.pivots);
 
- // document.getElementById("dyn").innerHTML =
+   document.getElementById("dyn").innerHTML =
     `ATR-14%: <span class="b">${(atrp*100).toFixed(2)}%</span> · `
   + `rev Minor: <span class="b">${(revMinor*100).toFixed(1)}%</span> · `
   + `rev Major: <span class="b">${(revMajor*100).toFixed(1)}%</span> · `
   + `rev Primary: <span class="b">${(revPrimary*100).toFixed(1)}%</span>`;
-//  document.getElementById("asof").textContent = "Last candle: " + fmtDate(last(candles).time);
+  document.getElementById("asof").textContent = "Last candle: " + fmtDate(last(candles).time);
 }
 
 run().catch(e=>{ console.error(e); });

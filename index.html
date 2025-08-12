@@ -48,7 +48,7 @@
 </div>
 
 <script>
-// ===== Data source (CORS friendly, no key) =====
+// ===== Data source (CORS friendly) =====
 const API = "https://min-api.cryptocompare.com/data/v2/histoday?fsym=BTC&tsym=USDT&limit=2000";
 
 // ===== Helpers =====
@@ -58,7 +58,7 @@ const daysBetween = (aTS,bTS) => Math.max(0, Math.round((bTS-aTS)/86400));
 const last = arr => arr[arr.length-1];
 const clamp = (x,min,max)=>Math.max(min,Math.min(max,x));
 
-// True Range & ATR-14 as % of price
+// ATR-14% of price
 function trueRange(prevClose, high, low){
   const a = high - low, b = Math.abs(high - prevClose), c = Math.abs(low - prevClose);
   return Math.max(a,b,c);
@@ -66,20 +66,14 @@ function trueRange(prevClose, high, low){
 function atr14Percent(candles){
   if(candles.length < 15) return 0.10;
   const trs = [];
-  for(let i=1;i<candles.length;i++){
-    trs.push(trueRange(candles[i-1].close, candles[i].high, candles[i].low));
-  }
+  for(let i=1;i<candles.length;i++) trs.push(trueRange(candles[i-1].close, candles[i].high, candles[i].low));
   const atrs = [];
-  for(let i=13;i<trs.length;i++){
-    let sum=0; for(let k=i-13;k<=i;k++) sum+=trs[k];
-    atrs.push(sum/14);
-  }
-  const atr = last(atrs);
-  const ref = last(candles).close || 1;
-  return atr / ref; // 0.05 = 5%
+  for(let i=13;i<trs.length;i++){ let s=0; for(let k=i-13;k<=i;k++) s+=trs[k]; atrs.push(s/14); }
+  const atr = last(atrs), ref = last(candles).close || 1;
+  return atr / ref;
 }
 
-// ZigZag on close
+// ZigZag on close with reversal %
 function zigzag(candles, revPct){
   const series = candles.map(c=>({t:c.time, p:c.close}));
   if(series.length<2) return {pivots:[], segments:[]};
@@ -111,7 +105,15 @@ function zigzag(candles, revPct){
   return {pivots,segments};
 }
 
-// Latest segment matching a class window
+// Class windows (added Strong Major = 91–360d)
+const CFG = {
+  primary:      { name:"Primary",       minDays:365, maxDays:Infinity },
+  strongMajor:  { name:"Strong Major",  minDays:91,  maxDays:360     },
+  major:        { name:"Major",         minDays:21,  maxDays:90      },
+  minor:        { name:"Minor",         minDays:2,   maxDays:Infinity }
+};
+
+// Pick latest segment matching a class
 function pickLatestForClass(segments, cls){
   for(let i=segments.length-1;i>=0;i--){
     const s=segments[i];
@@ -120,20 +122,53 @@ function pickLatestForClass(segments, cls){
   return null;
 }
 
-// Cancel ONLY by later opposite segment of SAME class
-function cancelledBySameClass(segments, pickIdx, cls){
-  if (pickIdx == null || pickIdx < 0) return false;
-  const picked = segments[pickIdx];
-  for (let j = pickIdx + 1; j < segments.length; j++){
-    const s = segments[j];
-    const sameClass = s.days >= cls.minDays && s.days <= cls.maxDays;
-    if (!sameClass) continue;
-    if (s.dir !== picked.dir) return true;
+// --- Cancellation rules ---
+// 1) Primary cancels only by later opposite Primary (unchanged)
+function cancelledPrimary(segPrim, pickIdx){
+  if(pickIdx==null || pickIdx<0) return false;
+  const picked=segPrim[pickIdx];
+  for(let j=pickIdx+1;j<segPrim.length;j++){
+    const s=segPrim[j];
+    const same = s.days>=CFG.primary.minDays;
+    if(!same) continue;
+    if(s.dir!==picked.dir) return true;
+  }
+  return false;
+}
+// 2) Minor cancels only by later opposite Minor (unchanged)
+function cancelledMinor(segMinor, pickIdx){
+  if(pickIdx==null || pickIdx<0) return false;
+  const picked=segMinor[pickIdx];
+  for(let j=pickIdx+1;j<segMinor.length;j++){
+    const s=segMinor[j];
+    const same = s.days>=CFG.minor.minDays;
+    if(!same) continue;
+    if(s.dir!==picked.dir) return true;
+  }
+  return false;
+}
+// 3) Major cancels by later opposite Major OR later opposite Strong Major
+function cancelledMajorByMajorOrStrong(segMajors, pickMIdx){
+  if(pickMIdx==null || pickMIdx<0) return false;
+  const picked = segMajors[pickMIdx];
+  for(let j=pickMIdx+1;j<segMajors.length;j++){
+    const s = segMajors[j];
+    const isMajor      = (s.days>=CFG.major.minDays && s.days<=CFG.major.maxDays);
+    const isStrongMaj  = (s.days>=CFG.strongMajor.minDays && s.days<=CFG.strongMajor.maxDays);
+    if(!(isMajor || isStrongMaj)) continue;
+    if(s.dir!==picked.dir) return true;
   }
   return false;
 }
 
-// Trading hint: follow Major up when a down-Minor breaks
+// If there is a later Major (any direction) after a Strong Major → hide Strong Major
+function shouldHideStrongMajor(pickSMIdx, pickMIdx){
+  if(pickSMIdx==null || pickSMIdx<0) return false;
+  if(pickMIdx==null || pickMIdx<0) return false;
+  return pickMIdx > pickSMIdx; // newer Major exists → hide Strong Major panel
+}
+
+// Trading hint (unchanged)
 function tradingHint(majorPick, majorCancelled, minorSegments){
   if(!majorPick || majorCancelled || majorPick.seg.dir!=="up") return {text:"Wait for an up Major trend to follow the rule.", ok:false};
   const mLast = last(minorSegments);
@@ -144,7 +179,7 @@ function tradingHint(majorPick, majorCancelled, minorSegments){
   return {text:"Major is UP and Minor is UP (no fresh break).", ok:false};
 }
 
-// Simple canvas chart
+// Canvas chart
 function drawChart(canvas, candles, pivots){
   const ctx=canvas.getContext("2d");
   const W=canvas.width, H=canvas.height;
@@ -195,70 +230,69 @@ async function run(){
     if(js.Response!=="Success") throw new Error("API error");
     const candles = js.Data.Data;
 
-    // Adaptive thresholds from ATR-14%
+    // Adaptive thresholds
     const atrp = atr14Percent(candles);
     const revMinor   = clamp(2.5*atrp, 0.06, 0.20);
     const revMajor   = clamp(5.0*atrp, 0.15, 0.40);
     const revPrimary = clamp(8.0*atrp, 0.20, 0.60);
 
-    // ZigZag per class (use major threshold for both Major & Strong Major)
+    // ZigZag per class (Major threshold used for Major & Strong Major)
     const zzMinor    = zigzag(candles, revMinor);
-    const zzMajor    = zigzag(candles, revMajor);
+    const zzMajors   = zigzag(candles, revMajor);
     const zzPrimary  = zigzag(candles, revPrimary);
 
-    // Class windows (added Strong Major = 91–360d)
-    const CFG = {
-      primary:      { name:"Primary",       minDays:365, maxDays:Infinity },
-      strongMajor:  { name:"Strong Major",  minDays:91,  maxDays:360     },
-      major:        { name:"Major",         minDays:21,  maxDays:90      },
-      minor:        { name:"Minor",         minDays:2,   maxDays:Infinity }
-    };
+    const segMinor   = zzMinor.segments;
+    const segMajors  = zzMajors.segments;
+    const segPrimary = zzPrimary.segments;
 
-    const segPrim   = zzPrimary.segments;
-    const segMajors = zzMajor.segments; // used for Major & Strong Major classification
-    const segMinor  = zzMinor.segments;
+    const pickm  = pickLatestForClass(segMinor,   CFG.minor);
+    const pickM  = pickLatestForClass(segMajors,  CFG.major);
+    const pickSM = pickLatestForClass(segMajors,  CFG.strongMajor);
+    const pickP  = pickLatestForClass(segPrimary, CFG.primary);
 
-    const pickP  = pickLatestForClass(segPrim,   CFG.primary);
-    const pickSM = pickLatestForClass(segMajors, CFG.strongMajor);
-    const pickM  = pickLatestForClass(segMajors, CFG.major);
-    const pickm  = pickLatestForClass(segMinor,  CFG.minor);
+    const cancelledm = pickm ? cancelledMinor(segMinor, pickm.idx) : false;
+    const cancelledP = pickP ? cancelledPrimary(segPrimary, pickP.idx) : false;
+    const cancelledM = pickM ? cancelledMajorByMajorOrStrong(segMajors, pickM.idx) : false;
 
-    const cancelledP  = pickP  ? cancelledBySameClass(segPrim,   pickP.idx,  CFG.primary)      : false;
-    const cancelledSM = pickSM ? cancelledBySameClass(segMajors, pickSM.idx, CFG.strongMajor)  : false;
-    const cancelledM  = pickM  ? cancelledBySameClass(segMajors, pickM.idx,  CFG.major)        : false;
-    const cancelledm  = pickm  ? cancelledBySameClass(segMinor,  pickm.idx,  CFG.minor)        : false;
+    // Hide Strong Major if there is a later Major
+    const hideStrong = (pickSM && pickM && shouldHideStrongMajor(pickSM.idx, pickM.idx));
 
-    // Build report blocks
+    // Build report
     const report=document.getElementById("report");
     function block(label, pick, cancelled){
-      if(!pick){
-        return `<div class="small"><span class="k">${label} trend</span><div>No segment matches the duration window.</div></div>`;
-      }
+      if(!pick) return `<div class="small"><span class="k">${label} trend</span><div>No segment matches the duration.</div></div>`;
       const s=pick.seg, dirCls=s.dir==="up"?"up":"down";
       const badge = s.dir==="up" ? `<span class="badge bd-up">UP</span>` : `<span class="badge bd-down">DOWN</span>`;
       return `
         <div>
           <div class="${dirCls} v" style="font-size:16px;margin-bottom:4px">${label} trend ${badge}</div>
-          <div class="${dirCls} v" style="font-size:18px">${s.dir.toUpperCase()}</div>
           <div><span class="k">From:</span> ${fmtDate(s.startTS)} @ ${s.start.toLocaleString()}</div>
           <div><span class="k">To:</span> ${fmtDate(s.endTS)} @ ${s.end.toLocaleString()}</div>
           <div><span class="k">Change:</span> ${pct(s.change)} · <span class="k">Days:</span> ${s.days}</div>
-          <div><span class="k">Status:</span> ${cancelled ? "Cancelled by opposite later trend of same class" : "Active"}</div>
+          <div><span class="k">Status:</span> ${cancelled ? "Cancelled by opposite later trend (per rules)" : "Active"}</div>
         </div>
       `;
     }
     report.innerHTML =
-        block("Primary",      pickP,  cancelledP)
-      + block("Strong Major", pickSM, cancelledSM)
-      + block("Major",        pickM,  cancelledM)
-      + block("Minor",        pickm,  cancelledm);
+        block("Primary", pickP, cancelledP)
+      + (hideStrong ? "" : block("Strong Major", pickSM, false))
+      + block("Major",   pickM, cancelledM)
+      + block("Minor",   pickm, cancelledm);
 
-    // Trading hint (requires Major UP & not cancelled)
-    const hint = tradingHint(pickM, cancelledM, segMinor);
-    document.getElementById("hint").innerHTML =
-      `<div class="${hint.ok?'up':'k'}">${hint.text}</div>`;
+    // Trading hint
+    const hint = (pickM ? (pickM.seg.dir==="up" && !cancelledM) : false)
+      ? (function(){
+          const mLast = last(segMinor), mPrev = segMinor.length>1 ? segMinor[segMinor.length-2] : null;
+          if(mPrev && mLast && mPrev.dir==="down" && mLast.dir==="up")
+            return {text:"Major is UP and down-Minor just broke → LONG signal.", ok:true};
+          if(mLast && mLast.dir==="down")
+            return {text:"Major is UP but Minor is DOWN now → wait for an upside break.", ok:false};
+          return {text:"Major is UP and Minor is UP (no fresh break).", ok:false};
+        })()
+      : {text:"Wait for an up Major trend to follow the rule.", ok:false};
+    document.getElementById("hint").innerHTML = `<div class="${hint.ok?'up':'k'}">${hint.text}</div>`;
 
-    // Chart with Minor pivots
+    // Chart
     const cv=document.getElementById("chart");
     drawChart(cv, candles, zzMinor.pivots);
 

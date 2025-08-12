@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>BTC/USDT – Dow Theory (Daily, Adaptive, CoinGecko)</title>
+<title>BTC/USDT – Dow Theory (Daily, Adaptive)</title>
 <style>
   body{margin:0;background:#0f1115;color:#e6e6e6;font-family:Arial,Helvetica,sans-serif}
   .wrap{max-width:1040px;margin:20px auto;padding:16px}
@@ -30,10 +30,10 @@
     <span id="asof" class="badge">جاري التحميل…</span>
   </h1>
   <div class="note">
-    المصدر: <b>CoinGecko OHLC</b> (بدون CORS).<br>
+    المصدر: <b>CryptoCompare histoday</b> (بدون مفاتيح ولا CORS).<br>
     العتبات تتكيّف تلقائيًا باستخدام <b>ATR-14%</b>:
     Minor≈2.5×ATR% (6–20%) · Major≈5×ATR% (15–40%) · Primary≈8×ATR% (20–60%).<br>
-    المدد: Primary ≥365 يوم · Major 21–90 يوم · Minor ≥2 يوم. الفترة 90–364 يوم تُعرض كـ <b>Unclassified</b> حسب سؤالك.
+    المدد: Primary ≥365 يوم · Major 21–90 يوم · Minor ≥2 يوم. الفترة 90–364 يوم تُعرض كـ <b>Unclassified</b>.
   </div>
 
   <div class="grid">
@@ -54,27 +54,15 @@
 </div>
 
 <script>
-// ===== CoinGecko OHLC (لا يحتاج مفتاح، ويدعم CORS) =====
-// يعيد: [timestamp, open, high, low, close] بالمللي ثانية
-const CG_OHLC = "https://api.coingecko.com/api/v3/coins/bitcoin/ohlc?vs_currency=usd&days=max";
+// ===== مصدر البيانات: CryptoCompare =====
+const API = "https://min-api.cryptocompare.com/data/v2/histoday?fsym=BTC&tsym=USDT&limit=2000";
 
 // ===== Helpers =====
-const fmtDateMS = ms => new Date(ms).toISOString().slice(0,10);
+const fmtDate = ts => new Date(ts*1000).toISOString().slice(0,10);
 const pct = x => (x*100).toFixed(2) + "%";
-const daysBetweenMS = (aMS,bMS) => Math.max(0, Math.round((bMS-aMS)/86400000));
+const daysBetween = (aTS,bTS) => Math.max(0, Math.round((bTS-aTS)/86400));
 const last = arr => arr[arr.length-1];
 const clamp = (x,min,max)=>Math.max(min,Math.min(max,x));
-
-// تحويل OHLC CoinGecko إلى مصفوفة شموع
-function toCandles(ohlc){
-  return ohlc.map(row => ({
-    timeMS: row[0],
-    open: row[1],
-    high: row[2],
-    low:  row[3],
-    close:row[4]
-  }));
-}
 
 // True Range و ATR-14 نسبةً للسعر
 function trueRange(prevClose, high, low){
@@ -102,7 +90,7 @@ function atr14Percent(candles){
 
 // ZigZag بسيط على الإغلاق بعتبة revPct (نسبة)
 function zigzag(candles, revPct){
-  const series = candles.map(c=>({t:c.timeMS, p:c.close}));
+  const series = candles.map(c=>({t:c.time, p:c.close}));
   if(series.length<2) return {pivots:[], segments:[]};
   let pivots=[], trend=null;
   let extreme = {...series[0]};
@@ -139,7 +127,7 @@ function zigzag(candles, revPct){
     const A=pivots[i], B=pivots[i+1];
     const dir = (A.type==="low"&&B.type==="high")?"up":(A.type==="high"&&B.type==="low")?"down":(B.p>A.p?"up":"down");
     const change=(B.p-A.p)/A.p;
-    segments.push({dir,startTS:A.t,endTS:B.t,start:A.p,end:B.p,change,days:daysBetweenMS(A.t,B.t)});
+    segments.push({dir,startTS:A.t,endTS:B.t,start:A.p,end:B.p,change,days:daysBetween(A.t,B.t)});
   }
   return {pivots,segments};
 }
@@ -177,7 +165,7 @@ function drawChart(canvas, candles, pivots){
   ctx.clearRect(0,0,W,H);
   const padL=50, padR=10, padT=10, padB=24;
 
-  const xs=candles.map(c=>c.timeMS), ys=candles.map(c=>c.close);
+  const xs=candles.map(c=>c.time), ys=candles.map(c=>c.close);
   const minY=Math.min(...ys), maxY=Math.max(...ys);
   const x0=xs[0], x1=xs[xs.length-1];
   const xScale = t => padL + ( (t-x0)/(x1-x0) )*(W-padL-padR);
@@ -193,7 +181,7 @@ function drawChart(canvas, candles, pivots){
   // price line
   ctx.strokeStyle="#8ab4f8"; ctx.lineWidth=1.5; ctx.beginPath();
   candles.forEach((c,i)=>{
-    const x=xScale(c.timeMS), y=yScale(c.close);
+    const x=xScale(c.time), y=yScale(c.close);
     if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
   });
   ctx.stroke();
@@ -214,12 +202,13 @@ function drawChart(canvas, candles, pivots){
 async function run(){
   const status=document.getElementById("status");
   try{
-    status.textContent="جلب بيانات OHLC اليومية من CoinGecko…";
-    const res=await fetch(CG_OHLC,{cache:"no-store"});
-    if(!res.ok) throw new Error("CoinGecko HTTP "+res.status);
-    const ohlc=await res.json();
-    if(!Array.isArray(ohlc) || !ohlc.length) throw new Error("لا توجد بيانات");
-    const candles = toCandles(ohlc);
+    status.textContent="جلب بيانات اليومي من CryptoCompare…";
+    const res=await fetch(API,{cache:"no-store"});
+    if(!res.ok) throw new Error("HTTP "+res.status);
+    const js=await res.json();
+    if(js.Response!=="Success") throw new Error("API error");
+    // Data.Data = [{time, open, high, low, close, ...}] (الوقت بالثواني)
+    const candles = js.Data.Data;
 
     // 1) ATR-14%
     const atrp = atr14Percent(candles);
@@ -255,7 +244,7 @@ async function run(){
     function gapBadge(pick){
       if(!pick) return "";
       const d=pick.seg.days;
-      if(d>=90 && d<=364) return '<span class="badge">Unclassified</span>';
+      if(d>=90 && d<=364) return `<span class="badge">Unclassified 90–364d</span>`;
       return "";
     }
 
@@ -268,10 +257,10 @@ async function run(){
       const badge = s.dir==="up" ? `<span class="badge bd-up">UP</span>` : `<span class="badge bd-down">DOWN</span>`;
       return `
         <div style="margin-bottom:10px">
-          <div><span class="k">${label} trend</span>${badge}${gapBadge(pick)}</div>
+          <div><span class="k">${label} trend</span>${badge} ${gapBadge(pick)}</div>
           <div class="${dirCls} v">${s.dir.toUpperCase()}</div>
-          <div><span class="k">From:</span> ${fmtDateMS(s.startTS)} @ ${s.start.toLocaleString()}</div>
-          <div><span class="k">To:</span> ${fmtDateMS(s.endTS)} @ ${s.end.toLocaleString()}</div>
+          <div><span class="k">From:</span> ${fmtDate(s.startTS)} @ ${s.start.toLocaleString()}</div>
+          <div><span class="k">To:</span> ${fmtDate(s.endTS)} @ ${s.end.toLocaleString()}</div>
           <div><span class="k">Change:</span> ${pct(s.change)} · <span class="k">Days:</span> ${s.days}</div>
           <div><span class="k">Status:</span> ${cancelled ? "Cancelled by opposite later segment" : "Active"}</div>
         </div>
@@ -287,7 +276,7 @@ async function run(){
     document.getElementById("hint").innerHTML = `<div class="${hint.ok?'up':'k'} b">${hint.text}</div>`;
 
     const cv=document.getElementById("chart");
-    drawChart(cv, candles, zzMinor.pivots);
+    drawChart(cv, candles, zigzag(candles, revMinor).pivots);
 
     document.getElementById("dyn").innerHTML =
       `ATR-14% (أحدث): <span class="b">${(atrp*100).toFixed(2)}%</span> · `
@@ -295,13 +284,19 @@ async function run(){
     + `rev Major: <span class="b">${(revMajor*100).toFixed(1)}%</span> · `
     + `rev Primary: <span class="b">${(revPrimary*100).toFixed(1)}%</span>`;
 
-    document.getElementById("asof").textContent = "آخر شمعة: " + fmtDateMS(last(candles).timeMS);
+    document.getElementById("asof").textContent = "آخر شمعة: " + fmtDate(last(candles).time);
     status.textContent="تم.";
   }catch(e){
     console.error(e);
     document.getElementById("status").innerHTML = `<span class="err">خطأ: ${e.message || e}</span>`;
   }
 }
+
+run();
+</script>
+</body>
+</html>
+
 
 run();
 </script>
